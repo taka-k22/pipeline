@@ -4,3 +4,4 @@ shoki 入力だけ可能．拾うのは無理．
 kairyou 入力OK，拾うのOK．
 seigyoko-do seigyoko-doを検出してそこだけローカルファイルにエクスポート
 soujusin ラズパイにseigyoko-doを送りつけてステータスを表示
+changes for quickdraw!

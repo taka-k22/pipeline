@@ -1,23 +1,17 @@
-// puppeteer_vision_agent.js
-
 import puppeteer from "puppeteer-extra";
 import StealthPlugin from "puppeteer-extra-plugin-stealth";
 //import fs from "fs";
 import fetch from "node-fetch";
 import express from "express";
 
-
 puppeteer.use(StealthPlugin());
 
 /* ---------------------------
    HTTPサーバ（YOLOイベント受信）
 --------------------------- */
-
 const app = express();
 app.use(express.json());
-
 let pageRef = null;
-
 app.post("/yolo_event", async (req, res) => {
     const label = req.body.event;
     console.log("YOLOイベント:", label);
@@ -29,7 +23,6 @@ app.post("/yolo_event", async (req, res) => {
     }
     res.sendStatus(200);
 });
-
 app.listen(3000, () => {
     console.log("イベント受信用サーバ起動 :3000");
 });
@@ -76,9 +69,7 @@ async function runLLaVA(prompt) {
     console.log("テキストエリア検出成功");
     await page.type("textarea", "Say @vision:describe the scene@ when ready.", { delay: 50 });
     await page.keyboard.press("Enter");
-
     let streamBuffer = "";
-
     const lastExec = {};
     await page.exposeFunction("onPartialOutput", async (text) => {
 

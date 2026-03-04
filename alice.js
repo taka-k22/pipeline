@@ -1,24 +1,42 @@
 import puppeteer from "puppeteer-extra";
 import StealthPlugin from "puppeteer-extra-plugin-stealth";
-//import fs from "fs";
 import fetch from "node-fetch";
 import express from "express";
 
 puppeteer.use(StealthPlugin());
 
 /* ---------------------------
-   HTTPサーバ（YOLOイベント受信）
+   BME280ポーリング
+--------------------------- */
+let latestSensor = null;
+async function pollSensor() {
+    try {
+        const res = await fetch("http://kokomi.local:5000/sensor_data");
+        if (!res.ok) {
+            console.log("sensor fetch error:", res.status);
+            return;
+        }
+        const data = await res.json();
+        latestSensor = data;
+    } catch (err) {
+        console.log("sensor fetch failed:", err.message);
+    }
+}
+setInterval(pollSensor, 1000);
+
+/* ---------------------------
+   YOLOイベントリッスン
 --------------------------- */
 const app = express();
 app.use(express.json());
-let pageRef = null;
+let page = null;
 app.post("/yolo_event", async (req, res) => {
     const label = req.body.event;
     console.log("YOLOイベント:", label);
-    if (pageRef) {
+    if (page) {
         const msg = `YOLO検出: ${label} が現れました`;
-        await pageRef.type("textarea", msg, { delay: 10 });
-        await pageRef.keyboard.press("Enter");
+        await page.type("textarea", msg, { delay: 10 });
+        await page.keyboard.press("Enter");
         console.log("ChatGPT送信:", msg);
     }
     res.sendStatus(200);
@@ -78,6 +96,7 @@ async function runLLaVA(prompt) {
         streamBuffer += text;
 
         while (true) {
+            //制御コード抽出
             const start = streamBuffer.indexOf("@");
             if (start === -1) break;
             const end = streamBuffer.indexOf("@", start + 1);
@@ -93,6 +112,8 @@ async function runLLaVA(prompt) {
             console.log("制御コード:", command);
 
             // ===== コマンドことの処理 =====
+
+            //涙液モジュール
             if (command === "tear") {
                 try {
                     const res = await fetch("http://kokomi.local:5000/command", {
@@ -106,6 +127,24 @@ async function runLLaVA(prompt) {
                 }
             }
 
+            //BME280センサ値送信
+            if (command === "THP") {
+                if (!latestSensor) {
+                    console.log("センサ値未取得");
+                    return;
+                }
+                const msg =
+                    `Sensor | Temp: ${latestSensor.temp.toFixed(2)} °C ` +
+                    `Hum: ${latestSensor.humidity.toFixed(2)}% ` +
+                    `Press: ${latestSensor.pressure.toFixed(2)} hPa`;
+                console.log("LLM送信:", msg);
+                if (page) {
+                    await page.type("textarea", msg, { delay: 10 });
+                    await page.keyboard.press("Enter");
+                }
+            }
+
+            // Visionコマンド
             if (command.startsWith("vision:")) {
                 const question = command.replace("vision:", "").trim();
                 const result = await runLLaVA(question);

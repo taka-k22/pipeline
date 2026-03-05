@@ -11,7 +11,7 @@ puppeteer.use(StealthPlugin());
 let latestSensor = null;
 async function pollSensor() {
     try {
-        const res = await fetch("http://kokomi.local:5000/sensor_data");
+        const res = await fetch("http://kokomi.local:5001/sensor_data");
         if (!res.ok) {
             console.log("sensor fetch error:", res.status);
             return;
@@ -49,6 +49,7 @@ app.listen(3000, () => {
    LLaVA 実行関数
 --------------------------- */
 async function runLLaVA(prompt) {
+    const instruction = "回答は日本語で30文字以内。\n";
     console.log("スナップショット取得中...");
     const img = await fetch("http://localhost:5000/snapshot");
     if (!img.ok) throw new Error("スナップショット取得失敗");
@@ -60,7 +61,7 @@ async function runLLaVA(prompt) {
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
             model: "llava",
-            prompt: prompt,
+            prompt: instruction + prompt,
             images: [base64],
             stream: false,
         }),
@@ -73,12 +74,21 @@ async function runLLaVA(prompt) {
    Puppeteer 起動，ChatGPT監視
 --------------------------- */
 (async () => {
-    const browser = await puppeteer.launch({
+    /*const browser = await puppeteer.launch({
         headless: false,
         defaultViewport: null,
         args: [
             "--no-sandbox",
             "--disable-blink-features=AutomationControlled",
+        ],
+    });*/
+    const browser = await puppeteer.launch({
+        headless: false,
+        defaultViewport: null,
+        userDataDir: "./chrome_profile",
+        args: [
+            "--no-sandbox",
+            "--start-maximized"
         ],
     });
     const page = await browser.newPage();
@@ -113,17 +123,35 @@ async function runLLaVA(prompt) {
 
             // ===== コマンドことの処理 =====
 
-            //涙液モジュール
-            if (command === "tear") {
+            // 涙液モジュール 
+            if (/^MT[0-9A-Fa-f]{6};$/.test(command)) {
                 try {
                     const res = await fetch("http://kokomi.local:5000/command", {
                         method: "POST",
-                        body: "tear",
-                        headers: { "Content-Type": "text/plain" },
+                        headers: {
+                            "Content-Type": "text/plain"
+                        },
+                        body: command
                     });
-                    console.log("💧 tear送信 →", res.status);
+                    console.log("Motor 送信 →", command, res.status);
                 } catch (err) {
-                    console.error("tear失敗:", err.message);
+                    console.error("Motor 送信失敗:", err.message);
+                }
+            }
+
+            // RGB LEDモジュール
+            if (/^LT[0-9A-Fa-f]{6};$/.test(command)) {
+                try {
+                    const res = await fetch("http://kokomi.local:5002/command", {
+                        method: "POST",
+                        headers: {
+                            "Content-Type": "text/plain"
+                        },
+                        body: command
+                    });
+                    console.log("RGB LED 送信 →", command, res.status);
+                } catch (err) {
+                    console.error("RGB LED 送信失敗:", err.message);
                 }
             }
 
@@ -149,6 +177,14 @@ async function runLLaVA(prompt) {
                 const question = command.replace("vision:", "").trim();
                 const result = await runLLaVA(question);
                 console.log("LLaVA:", result);
+                const msg =
+                    `Vision result for "${question}":\n` +
+                    result;
+                if (page) {
+                    await page.type('textarea, div[contenteditable="true"]', msg, { delay: 5 });
+                    await page.keyboard.press("Enter");
+                    console.log("LLM送信:", msg.slice(0, 80) + (msg.length > 80 ? "..." : ""));
+                }
             }
             streamBuffer = streamBuffer.slice(end + 1);
         }

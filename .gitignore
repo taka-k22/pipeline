@@ -1,3 +1,5 @@
 commands.log
 /node_modules
 /chrome_profile
+package-lock.json
+package.json

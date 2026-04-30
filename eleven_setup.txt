@@ -1,0 +1,22 @@
+@kokomi_kernel
+npm install ws node-record-lpcm16
+path %PATH%;C:\Program Files (x86)\sox-14-4-2（この2つはインストールしたが使ってない）
+
+npm install express @elevenlabs/elevenlabs-js dotenv
+npm install cors
+
+
+@echo off
+
+REM === Node系（並列起動）===
+start "" node C:\github\kokomi_kernel\alice.js
+start "" node C:\github\kokomi_kernel\realtime_stt.js
+start "" node C:\github\kokomi_kernel\streaming_tts.js
+
+REM === Python（仮想環境有効化して実行）===
+start "" cmd /k ^
+"cd /d C:\Users\takan && ^
+deepsort-env\Scripts\activate && ^
+cd /d C:\github\kokomi_kernel && ^
+python deepsort.py"
+

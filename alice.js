@@ -123,7 +123,7 @@ async function runLLaVA(prompt) {
 
             // ===== コマンドことの処理 =====
 
-            // 涙液モジュール 
+            // 涙液モジュール  MT形式のコマンドを受け取ったらそのままラズパイに送信
             if (/^MT[0-9A-Fa-f]{6};$/.test(command)) {
                 try {
                     const res = await fetch("http://kokomi.local:5000/command", {
@@ -139,7 +139,7 @@ async function runLLaVA(prompt) {
                 }
             }
 
-            // RGB LEDモジュール
+            // RGB LEDモジュール LTRBGの6桁16進数を受け取り，そのままラズパイに送信
             if (/^LT[0-9A-Fa-f]{6};$/.test(command)) {
                 try {
                     const res = await fetch("http://kokomi.local:5002/command", {
@@ -155,7 +155,7 @@ async function runLLaVA(prompt) {
                 }
             }
 
-            //BME280センサ値送信
+            //BME280センサ値送信 @THP@ を受け取ったら最新のセンサ値をChatGPTに送信
             if (command === "THP") {
                 if (!latestSensor) {
                     console.log("センサ値未取得");

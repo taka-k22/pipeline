@@ -1,0 +1,78 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <meta charset="utf-8">
+  <title>Realtime STT</title>
+</head>
+<body>
+  <button id="startBtn">Start</button>
+  <button id="stopBtn">Stop</button>
+  <pre id="output"></pre>
+
+  <script type="module">
+    import { Scribe, RealtimeEvents } from "https://cdn.skypack.dev/@elevenlabs/client";
+
+    let connection = null;
+    const output = document.getElementById("output");
+
+    document.getElementById("startBtn").onclick = start;
+    document.getElementById("stopBtn").onclick = stop;
+
+    async function start() {
+      console.log("start clicked");
+
+      // トークン取得
+      const res = await fetch("http://localhost:3000/scribe-token");
+      const { token } = await res.json();
+      console.log("token:", token);
+
+      // 接続
+      connection = Scribe.connect({
+        token,
+        modelId: "scribe_v2_realtime",
+        microphone: {
+          echoCancellation: true,
+          noiseSuppression: true,
+          autoGainControl: true,
+        },
+      });
+
+      // --- デバッグ ---
+      connection.on(RealtimeEvents.OPEN, () => {
+        console.log("WS OPEN");
+      });
+
+      connection.on(RealtimeEvents.ERROR, (e) => {
+        console.error("ERROR", e);
+      });
+
+      connection.on(RealtimeEvents.CLOSE, () => {
+        console.log("WS CLOSED");
+      });
+
+      // --- リアルタイム表示 ---
+      connection.on(RealtimeEvents.PARTIAL_TRANSCRIPT, (data) => {
+        console.log("PARTIAL:", data.text);
+
+        // 上書き表示
+        output.textContent = data.text;
+      });
+
+      // --- 確定 ---
+      connection.on(RealtimeEvents.COMMITTED_TRANSCRIPT, (data) => {
+        console.log("FINAL:", data.text);
+
+        // 改行して確定
+        output.textContent += "\n" + data.text;
+      });
+    }
+
+    function stop() {
+      if (connection) {
+        connection.close();
+        connection = null;
+      }
+    }
+  </script>
+</body>
+</html>

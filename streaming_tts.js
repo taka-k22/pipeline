@@ -1,7 +1,7 @@
 import { spawn } from "child_process";
 
 const res = await fetch(
-  "https://api.elevenlabs.io/v1/text-to-speech/JgWCVquTJEvtfo5gWQkx?output_format=mp3_44100_128",
+  "https://api.elevenlabs.io/v1/text-to-speech/JgWCVquTJEvtfo5gWQkx/stream?output_format=mp3_44100_128",
   {
     method: "POST",
     headers: {
@@ -15,18 +15,29 @@ const res = await fetch(
   }
 );
 
-if (!res.ok) {
+if (!res.ok || !res.body) {
   console.log(await res.text());
   throw new Error("TTS failed");
 }
 
-const buffer = Buffer.from(await res.arrayBuffer());
-
+// ffplay起動
 const ffplay = spawn("ffplay", [
   "-nodisp",
   "-autoexit",
+  "-loglevel", "quiet",
   "-"
 ]);
 
-ffplay.stdin.write(buffer);
-ffplay.stdin.end();
+// WebStream → Node stream に変換して pipe
+const reader = res.body.getReader();
+
+async function pump() {
+  while (true) {
+    const { done, value } = await reader.read();
+    if (done) break;
+    ffplay.stdin.write(Buffer.from(value));
+  }
+  ffplay.stdin.end();
+}
+
+pump();

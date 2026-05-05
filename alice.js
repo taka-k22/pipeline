@@ -2,6 +2,7 @@ import puppeteer from "puppeteer-extra";
 import StealthPlugin from "puppeteer-extra-plugin-stealth";
 import fetch from "node-fetch";
 import express from "express";
+import { spawn } from "child_process";
 
 puppeteer.use(StealthPlugin());
 
@@ -22,9 +23,103 @@ const SENSOR_UNITS = {
     humidity: "percent",
     pressure: "hpa",
 };
+const TTS_ENABLED = true;
+const ELEVENLABS_VOICE_ID = process.env.ELEVENLABS_VOICE_ID || "JgWCVquTJEvtfo5gWQkx";
+const ELEVENLABS_MODEL_ID = process.env.ELEVENLABS_MODEL_ID || "eleven_v3";
+const ELEVENLABS_API_KEY = process.env.ELEVENLABS_API_KEY || "sk_6692c4d1ed233386d711a4bee9368078ce75814b5b817fb7";
+const ELEVENLABS_OUTPUT_FORMAT = process.env.ELEVENLABS_OUTPUT_FORMAT || "mp3_44100_128";
 
 let latestSensor = null;
 let page = null;
+let ttsQueue = Promise.resolve();
+
+/* ---------------------------
+   ElevenLabs TTS
+--------------------------- */
+function streamToFfplay(body) {
+    return new Promise(async (resolve, reject) => {
+        const ffplay = spawn("ffplay", [
+            "-nodisp",
+            "-autoexit",
+            "-loglevel",
+            "quiet",
+            "-",
+        ]);
+
+        ffplay.on("error", reject);
+        ffplay.on("close", (code) => {
+            if (code === 0) {
+                resolve();
+            } else {
+                reject(new Error(`ffplay exited with code ${code}`));
+            }
+        });
+
+        try {
+            if (typeof body.getReader === "function") {
+                const reader = body.getReader();
+                while (true) {
+                    const { done, value } = await reader.read();
+                    if (done) break;
+                    if (!ffplay.stdin.write(Buffer.from(value))) {
+                        await new Promise((drainResolve) => ffplay.stdin.once("drain", drainResolve));
+                    }
+                }
+            } else {
+                for await (const chunk of body) {
+                    if (!ffplay.stdin.write(Buffer.from(chunk))) {
+                        await new Promise((drainResolve) => ffplay.stdin.once("drain", drainResolve));
+                    }
+                }
+            }
+
+            ffplay.stdin.end();
+        } catch (err) {
+            ffplay.stdin.destroy();
+            reject(err);
+        }
+    });
+}
+
+async function speakTextNow(text) {
+    const trimmedText = text.trim();
+    if (!trimmedText) return;
+
+    const url = `https://api.elevenlabs.io/v1/text-to-speech/${ELEVENLABS_VOICE_ID}/stream?output_format=${ELEVENLABS_OUTPUT_FORMAT}`;
+    const res = await fetch(url, {
+        method: "POST",
+        headers: {
+            "xi-api-key": ELEVENLABS_API_KEY,
+            "Content-Type": "application/json",
+        },
+        body: JSON.stringify({
+            text: trimmedText,
+            model_id: ELEVENLABS_MODEL_ID,
+        }),
+    });
+
+    if (!res.ok || !res.body) {
+        const body = await res.text();
+        throw new Error(`TTS failed: ${res.status} ${body}`);
+    }
+
+    await streamToFfplay(res.body);
+}
+
+function speakTTS(text) {
+    if (!TTS_ENABLED) {
+        console.log("TTS skipped: disabled");
+        return Promise.resolve();
+    }
+
+    ttsQueue = ttsQueue
+        .catch((err) => {
+            console.error("previous TTS failed:", err.message);
+        })
+        .then(() => speakTextNow(text));
+
+    return ttsQueue;
+}
 
 /* ---------------------------
    BME280 polling
@@ -326,7 +421,9 @@ async function executeAuditedPayload(payload) {
             emotion: payload.emotion,
             intensity: payload.intensity,
         });
-        // TODO: Call TTS here after the speech system is wired into the JSON protocol.
+        speakTTS(payload.speech).catch((err) => {
+            console.error("TTS failed:", err.message);
+        });
     }
 
     if ("actions" in payload) {

@@ -265,11 +265,13 @@ async function sendJsonToChatGPT(obj) {
         console.log("ChatGPT send skipped: page is not ready", obj);
         return;
     }
+    const json = JSON.stringify(obj);
 
-    const json = JSON.stringify(obj, null, 2);
     await page.waitForSelector(CHAT_INPUT_SELECTOR, { timeout: 60000 });
     await page.type(CHAT_INPUT_SELECTOR, json, { delay: 5 });
-    await page.keyboard.press("Enter");
+    await page.waitForSelector('button[data-testid="send-button"]:not([disabled])');
+    await page.click('button[data-testid="send-button"]');
+
     console.log("ChatGPT JSON sent:", json);
 }
 
@@ -390,10 +392,27 @@ app.listen(3000, () => {
 });
 
 /* ---------------------------
+   User input endpoint
+--------------------------- */
+app.post("/user_input", async (req, res) => {
+    const text = req.body.text;
+
+    if (typeof text !== "string" || text.trim() === "") {
+        return res.status(400).json({ error: "text must be a non-empty string" });
+    }
+
+    await sendJsonToChatGPT({
+        user_input: text.trim(),
+    });
+
+    return res.json({ status: "OK" });
+});
+
+/* ---------------------------
    LLaVA
 --------------------------- */
 async function runLLaVA(prompt) {
-    const instruction = "Answer in Japanese within 30 characters.\n";
+    const instruction = "Describe the scene in English in 1-2 sentences, maximum 50 words. Focus only on important objects, people, and actions. Do not repeat details.\n";
     console.log("fetching snapshot...");
     const img = await fetch("http://localhost:5000/snapshot");
     if (!img.ok) throw new Error("snapshot fetch failed");

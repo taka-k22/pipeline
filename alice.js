@@ -7,6 +7,8 @@ import { spawn } from "child_process";
 puppeteer.use(StealthPlugin());
 
 const CHAT_INPUT_SELECTOR = 'textarea, div[contenteditable="true"]';
+const REMOTE_DEBUGGING_URL = "http://127.0.0.1:9222";
+const CHATGPT_URL = "https://chatgpt.com/";
 const VALID_TOP_LEVEL_FIELDS = new Set(["speech", "emotion", "intensity", "actions", "requests"]);
 const VALID_EMOTIONS = new Set([
     "neutral",
@@ -539,24 +541,28 @@ async function runLLaVA(prompt) {
    Puppeteer boot and ChatGPT monitor
 --------------------------- */
 (async () => {
-    const browser = await puppeteer.launch({
-        headless: false,
-        defaultViewport: null,
-        userDataDir: "./chrome_profile",
-        args: [
-            "--no-sandbox",
-            "--start-maximized",
-        ],
+    let browser;
+    try {
+        browser = await puppeteer.connect({ browserURL: REMOTE_DEBUGGING_URL });
+    } catch (err) {
+        console.error('Failed to connect to Chrome. Start Chrome with: chrome.exe --remote-debugging-port=9222 --user-data-dir="C:\\chrome-debug-profile"');
+        throw err;
+    }
+
+    const pages = await browser.pages();
+    page = pages.find((browserPage) => {
+        const url = browserPage.url();
+        return url.includes("chatgpt.com") || url.includes("chat.openai.com");
     });
 
-    page = await browser.newPage();
-    await page.goto("https://chat.openai.com/", { waitUntil: "domcontentloaded" });
+    if (!page) {
+        page = await browser.newPage();
+        await page.goto(CHATGPT_URL, { waitUntil: "domcontentloaded" });
+    }
+
+    await page.bringToFront();
     await page.waitForSelector(CHAT_INPUT_SELECTOR, { timeout: 60000 });
     console.log("ChatGPT input detected");
-
-    await sendJsonToChatGPT({
-        user_input: "Ready. Use JSON only.",
-    });
 
     let streamBuffer = "";
     const processedJsonTexts = new Set();

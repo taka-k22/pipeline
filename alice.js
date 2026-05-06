@@ -3,45 +3,32 @@ import StealthPlugin from "puppeteer-extra-plugin-stealth";
 import fetch from "node-fetch";
 import express from "express";
 import { spawn } from "child_process";
+import fs from "fs";
 import "dotenv/config";
+
+const config = JSON.parse(fs.readFileSync(new URL("./config.json", import.meta.url), "utf8"));
 
 puppeteer.use(StealthPlugin());
 
-const CHAT_INPUT_SELECTOR = 'textarea, div[contenteditable="true"]';
-const REMOTE_DEBUGGING_URL = "http://127.0.0.1:9222";
-const CHATGPT_URL = "https://chatgpt.com/";
-const VALID_TOP_LEVEL_FIELDS = new Set(["speech", "emotion", "intensity", "actions", "requests"]);
-const VALID_EMOTIONS = new Set([
-    "neutral",
-    "happy",
-    "calm",
-    "sad",
-    "angry",
-    "surprised",
-    "fear",
-    "thinking",
-]);
-const SENSOR_UNITS = {
-    temperature: "celsius",
-    humidity: "percent",
-    pressure: "hpa",
-    brightness: "raw",
-};
+const CHAT_INPUT_SELECTOR = config.browser.chatInputSelector;
+const REMOTE_DEBUGGING_URL = config.browser.remoteDebuggingUrl;
+const CHATGPT_URL = config.browser.chatgptUrl;
+const VALID_TOP_LEVEL_FIELDS = new Set(config.audit.validTopLevelFields);
+const VALID_EMOTIONS = new Set(config.audit.validEmotions);
+const SENSOR_UNITS = config.sensors.units;
+const PROCESS_STARTED_AT = Date.now();
+const INITIAL_STATE_DELAY_MS = Math.max(0, Number(config.browser.initialStateDelaySeconds ?? 0) * 1000);
 
 /* ---------------------------
    Touch sensor bindings
 --------------------------- */
-const TOUCH_SENSOR_BINDINGS = {
-    touch_01: "head",
-    touch_02: "hand",
-    touch_03: "shoulder",
-};
+const TOUCH_SENSOR_BINDINGS = config.touch.sensorBindings;
 
-const TTS_ENABLED = true;
-const ELEVENLABS_VOICE_ID = process.env.ELEVENLABS_VOICE_ID || "JgWCVquTJEvtfo5gWQkx";
-const ELEVENLABS_MODEL_ID = process.env.ELEVENLABS_MODEL_ID || "eleven_v3";
+const TTS_ENABLED = config.tts.enabled;
+const ELEVENLABS_VOICE_ID = process.env.ELEVENLABS_VOICE_ID || config.tts.defaultVoiceId;
+const ELEVENLABS_MODEL_ID = process.env.ELEVENLABS_MODEL_ID || config.tts.defaultModelId;
 const ELEVENLABS_API_KEY = process.env.ELEVENLABS_API_KEY;
-const ELEVENLABS_OUTPUT_FORMAT = process.env.ELEVENLABS_OUTPUT_FORMAT || "mp3_44100_128";
+const ELEVENLABS_OUTPUT_FORMAT = process.env.ELEVENLABS_OUTPUT_FORMAT || config.tts.defaultOutputFormat;
 
 if (!ELEVENLABS_API_KEY) {
     throw new Error("ELEVENLABS_API_KEY is required. Set it in .env.");
@@ -51,18 +38,16 @@ let latestSensor = {};
 let page = null;
 let ttsQueue = Promise.resolve();
 
+function sleep(ms) {
+    return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
 /* ---------------------------
    ElevenLabs TTS
 --------------------------- */
 function streamToFfplay(body) {
     return new Promise(async (resolve, reject) => {
-        const ffplay = spawn("ffplay", [
-            "-nodisp",
-            "-autoexit",
-            "-loglevel",
-            "quiet",
-            "-",
-        ]);
+        const ffplay = spawn(config.tts.playerCommand, config.tts.playerArgs);
 
         ffplay.on("error", reject);
         ffplay.on("close", (code) => {
@@ -103,7 +88,7 @@ async function speakTextNow(text) {
     const trimmedText = text.trim();
     if (!trimmedText) return;
 
-    const url = `https://api.elevenlabs.io/v1/text-to-speech/${ELEVENLABS_VOICE_ID}/stream?output_format=${ELEVENLABS_OUTPUT_FORMAT}`;
+    const url = `${config.tts.baseUrl}/${ELEVENLABS_VOICE_ID}/stream?output_format=${ELEVENLABS_OUTPUT_FORMAT}`;
     const res = await fetch(url, {
         method: "POST",
         headers: {
@@ -144,7 +129,7 @@ function speakTTS(text) {
 --------------------------- */
 async function pollSensor() {
     try {
-        const res = await fetch("http://kokomi.local:5000/bme280/sensor_data");
+        const res = await fetch(config.sensors.bme280Url);
         if (!res.ok) {
             console.log("sensor fetch error:", res.status);
             return;
@@ -157,7 +142,7 @@ async function pollSensor() {
         console.log("sensor fetch failed:", err.message);
     }
 }
-setInterval(pollSensor, 1000);
+setInterval(pollSensor, config.sensors.bme280PollIntervalMs);
 pollSensor();
 
 /* ---------------------------
@@ -165,13 +150,13 @@ pollSensor();
 --------------------------- */
 async function pollBrightnessSensor() {
     try {
-        const res = await fetch("http://192.168.0.149:5000/cds/sensor_data");
+        const res = await fetch(config.sensors.brightnessUrl);
         if (!res.ok) {
             console.log("brightness sensor fetch error:", res.status);
             return;
         }
         const data = await res.json();
-        const brightness = data.brightness ?? data.cds;
+        const brightness = data[config.sensors.brightnessResponseFields[0]] ?? data[config.sensors.brightnessResponseFields[1]];
         if (typeof brightness !== "number" || !Number.isFinite(brightness)) {
             console.log("brightness sensor response missing brightness:", data);
             return;
@@ -184,7 +169,7 @@ async function pollBrightnessSensor() {
         console.log("brightness sensor fetch failed:", err.message);
     }
 }
-setInterval(pollBrightnessSensor, 1000);
+setInterval(pollBrightnessSensor, config.sensors.brightnessPollIntervalMs);
 pollBrightnessSensor();
 
 /* ---------------------------
@@ -288,8 +273,8 @@ function validateSpeech(payload) {
     if (typeof payload.intensity !== "number" || !Number.isFinite(payload.intensity)) {
         return "intensity must be a finite number";
     }
-    if (payload.intensity < 0.0 || payload.intensity > 1.0) {
-        return "intensity must be from 0.0 to 1.0";
+    if (payload.intensity < config.audit.intensityMin || payload.intensity > config.audit.intensityMax) {
+        return `intensity must be from ${config.audit.intensityMin.toFixed(1)} to ${config.audit.intensityMax.toFixed(1)}`;
     }
 
     return null;
@@ -312,11 +297,11 @@ function validateActions(actions) {
             if (!hasExactlyKeys(action.params, ["speed", "duration"])) {
                 return "tear params must contain exactly speed and duration";
             }
-            if (!Number.isInteger(action.params.speed) || action.params.speed < 0 || action.params.speed > 255) {
-                return "tear speed must be an integer from 0 to 255";
+            if (!Number.isInteger(action.params.speed) || action.params.speed < config.actions.tear.speedMin || action.params.speed > config.actions.tear.speedMax) {
+                return `tear speed must be an integer from ${config.actions.tear.speedMin} to ${config.actions.tear.speedMax}`;
             }
-            if (!Number.isInteger(action.params.duration) || action.params.duration < 0 || action.params.duration > 255) {
-                return "tear duration must be an integer from 0 to 255";
+            if (!Number.isInteger(action.params.duration) || action.params.duration < config.actions.tear.durationMin || action.params.duration > config.actions.tear.durationMax) {
+                return `tear duration must be an integer from ${config.actions.tear.durationMin} to ${config.actions.tear.durationMax}`;
             }
             continue;
         }
@@ -325,7 +310,7 @@ function validateActions(actions) {
             if (!hasExactlyKeys(action.params, ["color"])) {
                 return "led_change params must contain exactly color";
             }
-            if (typeof action.params.color !== "string" || !/^#[0-9A-Fa-f]{6}$/.test(action.params.color)) {
+            if (typeof action.params.color !== "string" || !new RegExp(config.actions.ledChange.colorPattern).test(action.params.color)) {
                 return "led_change color must be #RRGGBB";
             }
             continue;
@@ -342,7 +327,7 @@ function validateRequests(requests) {
         return "requests must be an array";
     }
 
-    const validSensorRequests = new Set(["temperature", "humidity", "pressure", "brightness"]);
+    const validSensorRequests = new Set(Object.keys(config.sensors.units));
 
     for (const request of requests) {
         if (typeof request === "string") {
@@ -361,8 +346,8 @@ function validateRequests(requests) {
         if (!isPlainObject(request.params) || !hasExactlyKeys(request.params, ["task"])) {
             return "vision params must contain exactly task";
         }
-        if (request.params.task !== "describe_scene") {
-            return "vision task must be describe_scene";
+        if (request.params.task !== config.vision.task) {
+            return `vision task must be ${config.vision.task}`;
         }
     }
 
@@ -410,10 +395,10 @@ async function sendJsonToChatGPT(obj) {
     }
     const json = JSON.stringify(obj);
 
-    await page.waitForSelector(CHAT_INPUT_SELECTOR, { timeout: 60000 });
-    await page.type(CHAT_INPUT_SELECTOR, json, { delay: 5 });
-    await page.waitForSelector('button[data-testid="send-button"]:not([disabled])');
-    await page.click('button[data-testid="send-button"]');
+    await page.waitForSelector(CHAT_INPUT_SELECTOR, { timeout: config.browser.inputTimeoutMs });
+    await page.type(CHAT_INPUT_SELECTOR, json, { delay: config.browser.typeDelayMs });
+    await page.waitForSelector(config.browser.enabledSendButtonSelector);
+    await page.click(config.browser.sendButtonSelector);
 
     console.log("ChatGPT JSON sent:", json);
 }
@@ -421,8 +406,8 @@ async function sendJsonToChatGPT(obj) {
 async function sendActionToPi(action) {
     const url =
         action.type === "tear"
-            ? "http://kokomi.local:5000/motor/command"
-            : "http://kokomi.local:5000/led/command";
+            ? config.actions.tear.endpointUrl
+            : config.actions.ledChange.endpointUrl;
 
     const res = await fetch(url, {
         method: "POST",
@@ -496,7 +481,7 @@ async function executeAuditedPayload(payload) {
         for (const request of payload.requests) {
             if (typeof request === "object" && request.type === "vision") {
                 try {
-                    const query = "describe the scene";
+                    const query = config.vision.defaultQuery;
                     const result = await runLLaVA(query);
                     console.log("LLaVA:", result);
                     await sendJsonToChatGPT({
@@ -519,30 +504,26 @@ async function executeAuditedPayload(payload) {
 const app = express();
 app.use(express.json());
 
-app.post("/yolo_event", async (req, res) => {
+app.post(config.routes.yoloEvent, async (req, res) => {
     console.log("YOLO event:", req.body);
     await sendJsonToChatGPT({
-        event: {
-            source: "deepsort",
-            type: "person_appeared",
-            message: "A person has appeared.",
-        },
+        event: config.events.personAppeared,
     });
     res.sendStatus(200);
 });
 
-app.post("/touch_sensor_input", async (req, res) => {
+app.post(config.routes.touchSensorInput, async (req, res) => {
     const event = req.body.event;
 
     if (!isPlainObject(event)) {
         console.log("rejected touch event: event must be an object", req.body);
         return res.status(400).json({ error: "event must be an object" });
     }
-    if (event.source !== "touch") {
+    if (event.source !== config.touch.source) {
         console.log("rejected touch event: invalid source", event);
-        return res.status(400).json({ error: "source must be touch" });
+        return res.status(400).json({ error: `source must be ${config.touch.source}` });
     }
-    if (event.type !== "touch_started" && event.type !== "touch_ended") {
+    if (event.type !== config.touch.startedType && event.type !== config.touch.endedType) {
         console.log("rejected touch event: invalid type", event);
         return res.status(400).json({ error: "unknown touch event type" });
     }
@@ -555,8 +536,8 @@ app.post("/touch_sensor_input", async (req, res) => {
 
     const semanticEvent = {
         event: {
-            source: "touch",
-            action: event.type === "touch_started" ? "petting_started" : "petting_ended",
+            source: config.touch.source,
+            action: event.type === config.touch.startedType ? config.touch.startedAction : config.touch.endedAction,
             body_part: bodyPart,
             timestamp: event.timestamp,
         },
@@ -568,14 +549,14 @@ app.post("/touch_sensor_input", async (req, res) => {
     return res.json({ status: "OK" });
 });
 
-app.listen(3000, () => {
-    console.log("YOLO event server listening on :3000");
+app.listen(config.server.port, () => {
+    console.log(`YOLO event server listening on :${config.server.port}`);
 });
 
 /* ---------------------------
    User input endpoint
 --------------------------- */
-app.post("/user_input", async (req, res) => {
+app.post(config.routes.userInput, async (req, res) => {
     const text = req.body.text;
 
     if (typeof text !== "string" || text.trim() === "") {
@@ -593,23 +574,23 @@ app.post("/user_input", async (req, res) => {
    LLaVA
 --------------------------- */
 async function runLLaVA(prompt) {
-    const instruction = "Describe the scene in English in 1-2 sentences, maximum 50 words. Focus only on important objects, people, and actions. Do not repeat details.\n";
+    const instruction = config.vision.instructionTemplate.replace("{maxWords}", config.vision.maxWords);
     console.log("fetching snapshot...");
-    const img = await fetch("http://localhost:5000/snapshot");
+    const img = await fetch(config.vision.snapshotUrl);
     if (!img.ok) throw new Error("snapshot fetch failed");
 
     const buffer = await img.arrayBuffer();
     const base64 = Buffer.from(buffer).toString("base64");
 
     console.log("running LLaVA...");
-    const res = await fetch("http://localhost:11434/api/generate", {
+    const res = await fetch(config.vision.generateUrl, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
-            model: "llava",
+            model: config.vision.model,
             prompt: instruction + prompt,
             images: [base64],
-            stream: false,
+            stream: config.vision.stream,
         }),
     });
 
@@ -627,24 +608,22 @@ async function runLLaVA(prompt) {
     try {
         browser = await puppeteer.connect({ browserURL: REMOTE_DEBUGGING_URL });
     } catch (err) {
-        console.error('Failed to connect to Chrome. Start Chrome with: chrome.exe --remote-debugging-port=9222 --user-data-dir="C:\\chrome-debug-profile"');
+        console.error(config.browser.chromeConnectErrorMessage);
         throw err;
     }
 
-    const pages = await browser.pages();
-    page = pages.find((browserPage) => {
-        const url = browserPage.url();
-        return url.includes("chatgpt.com") || url.includes("chat.openai.com");
-    });
-
-    if (!page) {
-        page = await browser.newPage();
-        await page.goto(CHATGPT_URL, { waitUntil: "domcontentloaded" });
-    }
+    page = await browser.newPage();
+    await page.goto(CHATGPT_URL, { waitUntil: "domcontentloaded" });
 
     await page.bringToFront();
-    await page.waitForSelector(CHAT_INPUT_SELECTOR, { timeout: 60000 });
+    await page.waitForSelector(CHAT_INPUT_SELECTOR, { timeout: config.browser.inputTimeoutMs });
     console.log("ChatGPT input detected");
+
+    const remainingInitialStateDelayMs = Math.max(0, INITIAL_STATE_DELAY_MS - (Date.now() - PROCESS_STARTED_AT));
+    if (remainingInitialStateDelayMs > 0) {
+        console.log(`Waiting ${remainingInitialStateDelayMs}ms before setting ChatGPT initial state`);
+        await sleep(remainingInitialStateDelayMs);
+    }
 
     let streamBuffer = "";
     const processedJsonTexts = new Set();
@@ -681,23 +660,37 @@ async function runLLaVA(prompt) {
         }
     });
 
-    await page.evaluate(() => {
-        const lastContents = new Map();
+    await page.evaluate(({ assistantOutputSelector, outputPollIntervalMs }) => {
+        const lastContents = new Map(
+            Array.from(document.querySelectorAll(assistantOutputSelector), (container) => [
+                container,
+                container.innerText.trim(),
+            ]),
+        );
 
         function pollTexts() {
-            const containers = document.querySelectorAll(".markdown.prose");
+            const containers = document.querySelectorAll(assistantOutputSelector);
             containers.forEach((container) => {
                 const currentText = container.innerText.trim();
-                const lastText = lastContents.get(container) || "";
+                const hasLastText = lastContents.has(container);
+                const lastText = hasLastText ? lastContents.get(container) : "";
 
                 if (currentText && currentText !== lastText) {
                     lastContents.set(container, currentText);
-                    window.onPartialOutput(currentText);
+                    const appendedText = !hasLastText || currentText.startsWith(lastText)
+                        ? currentText.slice(lastText.length)
+                        : "";
+                    if (appendedText.trim()) {
+                        window.onPartialOutput(appendedText);
+                    }
                 }
             });
         }
 
-        console.log("ChatGPT output monitor started");
-        setInterval(pollTexts, 300);
+        console.log("ChatGPT output monitor started from initial state");
+        setInterval(pollTexts, outputPollIntervalMs);
+    }, {
+        assistantOutputSelector: config.browser.assistantOutputSelector,
+        outputPollIntervalMs: config.browser.outputPollIntervalMs,
     });
 })();

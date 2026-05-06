@@ -1,4 +1,7 @@
 commands.log
+.env
+.env.*
+!.env.example
 /node_modules
 /chrome_profile
 package-lock.json

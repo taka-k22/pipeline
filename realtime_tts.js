@@ -1,10 +1,15 @@
 import { spawn } from "child_process";
 import fetch from "node-fetch";
+import "dotenv/config";
 
 const ELEVENLABS_VOICE_ID = process.env.ELEVENLABS_VOICE_ID || "JgWCVquTJEvtfo5gWQkx";
 const ELEVENLABS_MODEL_ID = process.env.ELEVENLABS_MODEL_ID || "eleven_v3";
-const ELEVENLABS_API_KEY = process.env.ELEVENLABS_API_KEY || "sk_6692c4d1ed233386d711a4bee9368078ce75814b5b817fb7";
+const ELEVENLABS_API_KEY = process.env.ELEVENLABS_API_KEY;
 const ELEVENLABS_OUTPUT_FORMAT = process.env.ELEVENLABS_OUTPUT_FORMAT || "mp3_44100_128";
+
+if (!ELEVENLABS_API_KEY) {
+    throw new Error("ELEVENLABS_API_KEY is required. Set it in .env.");
+}
 
 let ttsQueue = Promise.resolve();
 

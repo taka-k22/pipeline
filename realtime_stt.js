@@ -7,8 +7,12 @@ import "dotenv/config";
 const app = express();
 app.use(cors()); // ←これが本体
 
+if (!process.env.ELEVENLABS_API_KEY) {
+  throw new Error("ELEVENLABS_API_KEY is required. Set it in .env.");
+}
+
 const elevenlabs = new ElevenLabsClient({
-  apiKey: "sk_6692c4d1ed233386d711a4bee9368078ce75814b5b817fb7",
+  apiKey: process.env.ELEVENLABS_API_KEY,
 });
 
 app.get("/scribe-token", async (req, res) => {

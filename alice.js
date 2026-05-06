@@ -1,5 +1,6 @@
 import puppeteer from "puppeteer-extra";
 import StealthPlugin from "puppeteer-extra-plugin-stealth";
+import { BskyAgent } from "@atproto/api";
 import fetch from "node-fetch";
 import express from "express";
 import { spawn } from "child_process";
@@ -27,6 +28,8 @@ const ELEVENLABS_VOICE_ID = process.env.ELEVENLABS_VOICE_ID || config.tts.defaul
 const ELEVENLABS_MODEL_ID = process.env.ELEVENLABS_MODEL_ID || config.tts.defaultModelId;
 const ELEVENLABS_API_KEY = process.env.ELEVENLABS_API_KEY;
 const ELEVENLABS_OUTPUT_FORMAT = process.env.ELEVENLABS_OUTPUT_FORMAT || config.tts.defaultOutputFormat;
+const BSKY_IDENTIFIER = process.env.BSKY_IDENTIFIER;
+const BSKY_PASSWORD = process.env.BSKY_PASSWORD;
 
 if (!ELEVENLABS_API_KEY) {
     throw new Error("ELEVENLABS_API_KEY is required. Set it in .env.");
@@ -35,6 +38,8 @@ if (!ELEVENLABS_API_KEY) {
 let latestSensor = {};
 let page = null;
 let ttsQueue = Promise.resolve();
+let blueskyAgent = null;
+let blueskyLoginPromise = null;
 
 /* ---------------------------
    ElevenLabs TTS
@@ -310,6 +315,19 @@ function validateActions(actions) {
             continue;
         }
 
+        if (action.type === "bluesky_post") {
+            if (!hasExactlyKeys(action.params, ["text"])) {
+                return "bluesky_post params must contain exactly text";
+            }
+            if (typeof action.params.text !== "string" || action.params.text.trim() === "") {
+                return "bluesky_post text must be a non-empty string";
+            }
+            if (action.params.text.length > config.actions.blueskyPost.maxTextLength) {
+                return `bluesky_post text must be ${config.actions.blueskyPost.maxTextLength} characters or fewer`;
+            }
+            continue;
+        }
+
         return `unknown action type: ${action.type}`;
     }
 
@@ -412,6 +430,51 @@ async function sendActionToPi(action) {
     console.log("executed action:", action, "status:", res.status);
 }
 
+async function getBlueskyAgent() {
+    if (!BSKY_IDENTIFIER || !BSKY_PASSWORD) {
+        throw new Error("BSKY_IDENTIFIER and BSKY_PASSWORD are required. Set them in .env.");
+    }
+
+    if (blueskyAgent) return blueskyAgent;
+    if (!blueskyLoginPromise) {
+        blueskyLoginPromise = (async () => {
+            const agent = new BskyAgent({
+                service: config.actions.blueskyPost.serviceUrl,
+            });
+
+            await agent.login({
+                identifier: BSKY_IDENTIFIER,
+                password: BSKY_PASSWORD,
+            });
+
+            blueskyAgent = agent;
+            return agent;
+        })().catch((err) => {
+            blueskyLoginPromise = null;
+            throw err;
+        });
+    }
+
+    return blueskyLoginPromise;
+}
+
+async function sendBlueskyPost(action) {
+    const text = action.params.text.trim();
+    const agent = await getBlueskyAgent();
+
+    await agent.post({ text });
+    console.log("posted to Bluesky:", text);
+}
+
+async function executeAction(action) {
+    if (action.type === "bluesky_post") {
+        await sendBlueskyPost(action);
+        return;
+    }
+
+    await sendActionToPi(action);
+}
+
 function readSensorField(field) {
     if (field === "temperature") {
         return latestSensor.temperature ?? latestSensor.temp;
@@ -455,7 +518,7 @@ async function executeAuditedPayload(payload) {
     if ("actions" in payload) {
         for (const action of payload.actions) {
             try {
-                await sendActionToPi(action);
+                await executeAction(action);
             } catch (err) {
                 console.error("action execution failed:", action, err.message);
             }

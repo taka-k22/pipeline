@@ -40,6 +40,10 @@
         "ledChange": {
             "endpointUrl": "http://kokomi.local:5000/led/command",
             "colorPattern": "^#[0-9A-Fa-f]{6}$"
+        },
+        "blueskyPost": {
+            "serviceUrl": "https://bsky.social",
+            "maxTextLength": 300
         }
     },
 

@@ -4,6 +4,7 @@
   "type": "module",
   "main": "server.js",
   "dependencies": {
+    "@atproto/api": "^0.19.13",
     "@elevenlabs/elevenlabs-js": "^2.45.0",
     "cors": "^2.8.6",
     "dotenv": "^17.4.2",

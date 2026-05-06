@@ -5,12 +5,11 @@
         "sendButtonSelector": "button[data-testid=\"send-button\"]",
         "enabledSendButtonSelector": "button[data-testid=\"send-button\"]:not([disabled])",
         "remoteDebuggingUrl": "http://127.0.0.1:9222",
-        "chatgptUrl": "https://chatgpt.com/c/69fa9fc7-aa40-83a9-8244-b30a4b7c3cd5",
+        "chatgptUrl": "https://chatgpt.com/",
         "existingPageUrlIncludes": ["chatgpt.com", "chat.openai.com"],
         "inputTimeoutMs": 60000,
         "typeDelayMs": 5,
         "outputPollIntervalMs": 300,
-        "initialStateDelaySeconds": 3,
         "chromeConnectErrorMessage": "Failed to connect to Chrome. Start Chrome with: chrome.exe --remote-debugging-port=9222 --user-data-dir=\"C:\\chrome-debug-profile\""
     },
 

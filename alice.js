@@ -16,8 +16,6 @@ const CHATGPT_URL = config.browser.chatgptUrl;
 const VALID_TOP_LEVEL_FIELDS = new Set(config.audit.validTopLevelFields);
 const VALID_EMOTIONS = new Set(config.audit.validEmotions);
 const SENSOR_UNITS = config.sensors.units;
-const PROCESS_STARTED_AT = Date.now();
-const INITIAL_STATE_DELAY_MS = Math.max(0, Number(config.browser.initialStateDelaySeconds ?? 0) * 1000);
 
 /* ---------------------------
    Touch sensor bindings
@@ -37,10 +35,6 @@ if (!ELEVENLABS_API_KEY) {
 let latestSensor = {};
 let page = null;
 let ttsQueue = Promise.resolve();
-
-function sleep(ms) {
-    return new Promise((resolve) => setTimeout(resolve, ms));
-}
 
 /* ---------------------------
    ElevenLabs TTS
@@ -612,18 +606,20 @@ async function runLLaVA(prompt) {
         throw err;
     }
 
-    page = await browser.newPage();
-    await page.goto(CHATGPT_URL, { waitUntil: "domcontentloaded" });
+    const pages = await browser.pages();
+    page = pages.find((browserPage) => {
+        const url = browserPage.url();
+        return config.browser.existingPageUrlIncludes.some((urlPart) => url.includes(urlPart));
+    });
+
+    if (!page) {
+        page = await browser.newPage();
+        await page.goto(CHATGPT_URL, { waitUntil: "domcontentloaded" });
+    }
 
     await page.bringToFront();
     await page.waitForSelector(CHAT_INPUT_SELECTOR, { timeout: config.browser.inputTimeoutMs });
     console.log("ChatGPT input detected");
-
-    const remainingInitialStateDelayMs = Math.max(0, INITIAL_STATE_DELAY_MS - (Date.now() - PROCESS_STARTED_AT));
-    if (remainingInitialStateDelayMs > 0) {
-        console.log(`Waiting ${remainingInitialStateDelayMs}ms before setting ChatGPT initial state`);
-        await sleep(remainingInitialStateDelayMs);
-    }
 
     let streamBuffer = "";
     const processedJsonTexts = new Set();
@@ -661,33 +657,22 @@ async function runLLaVA(prompt) {
     });
 
     await page.evaluate(({ assistantOutputSelector, outputPollIntervalMs }) => {
-        const lastContents = new Map(
-            Array.from(document.querySelectorAll(assistantOutputSelector), (container) => [
-                container,
-                container.innerText.trim(),
-            ]),
-        );
+        const lastContents = new Map();
 
         function pollTexts() {
             const containers = document.querySelectorAll(assistantOutputSelector);
             containers.forEach((container) => {
                 const currentText = container.innerText.trim();
-                const hasLastText = lastContents.has(container);
-                const lastText = hasLastText ? lastContents.get(container) : "";
+                const lastText = lastContents.get(container) || "";
 
                 if (currentText && currentText !== lastText) {
                     lastContents.set(container, currentText);
-                    const appendedText = !hasLastText || currentText.startsWith(lastText)
-                        ? currentText.slice(lastText.length)
-                        : "";
-                    if (appendedText.trim()) {
-                        window.onPartialOutput(appendedText);
-                    }
+                    window.onPartialOutput(currentText);
                 }
             });
         }
 
-        console.log("ChatGPT output monitor started from initial state");
+        console.log("ChatGPT output monitor started");
         setInterval(pollTexts, outputPollIntervalMs);
     }, {
         assistantOutputSelector: config.browser.assistantOutputSelector,

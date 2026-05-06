@@ -24,14 +24,25 @@ const SENSOR_UNITS = {
     temperature: "celsius",
     humidity: "percent",
     pressure: "hpa",
+    brightness: "raw",
 };
+
+/* ---------------------------
+   Touch sensor bindings
+--------------------------- */
+const TOUCH_SENSOR_BINDINGS = {
+    touch_01: "head",
+    touch_02: "hand",
+    touch_03: "shoulder",
+};
+
 const TTS_ENABLED = true;
 const ELEVENLABS_VOICE_ID = process.env.ELEVENLABS_VOICE_ID || "JgWCVquTJEvtfo5gWQkx";
 const ELEVENLABS_MODEL_ID = process.env.ELEVENLABS_MODEL_ID || "eleven_v3";
 const ELEVENLABS_API_KEY = process.env.ELEVENLABS_API_KEY || "sk_6692c4d1ed233386d711a4bee9368078ce75814b5b817fb7";
 const ELEVENLABS_OUTPUT_FORMAT = process.env.ELEVENLABS_OUTPUT_FORMAT || "mp3_44100_128";
 
-let latestSensor = null;
+let latestSensor = {};
 let page = null;
 let ttsQueue = Promise.resolve();
 
@@ -133,13 +144,43 @@ async function pollSensor() {
             console.log("sensor fetch error:", res.status);
             return;
         }
-        latestSensor = await res.json();
+        latestSensor = {
+            ...latestSensor,
+            ...(await res.json()),
+        };
     } catch (err) {
         console.log("sensor fetch failed:", err.message);
     }
 }
 setInterval(pollSensor, 1000);
 pollSensor();
+
+/* ---------------------------
+   CdS polling
+--------------------------- */
+async function pollBrightnessSensor() {
+    try {
+        const res = await fetch("http://192.168.0.149:5000/cds/sensor_data");
+        if (!res.ok) {
+            console.log("brightness sensor fetch error:", res.status);
+            return;
+        }
+        const data = await res.json();
+        const brightness = data.brightness ?? data.cds;
+        if (typeof brightness !== "number" || !Number.isFinite(brightness)) {
+            console.log("brightness sensor response missing brightness:", data);
+            return;
+        }
+        latestSensor = {
+            ...latestSensor,
+            brightness,
+        };
+    } catch (err) {
+        console.log("brightness sensor fetch failed:", err.message);
+    }
+}
+setInterval(pollBrightnessSensor, 1000);
+pollBrightnessSensor();
 
 /* ---------------------------
    JSON stream extraction and audit
@@ -296,7 +337,7 @@ function validateRequests(requests) {
         return "requests must be an array";
     }
 
-    const validSensorRequests = new Set(["temperature", "humidity", "pressure"]);
+    const validSensorRequests = new Set(["temperature", "humidity", "pressure", "brightness"]);
 
     for (const request of requests) {
         if (typeof request === "string") {
@@ -388,7 +429,6 @@ async function sendActionToPi(action) {
 }
 
 function readSensorField(field) {
-    if (!latestSensor) return undefined;
     if (field === "temperature") {
         return latestSensor.temperature ?? latestSensor.temp;
     }
@@ -484,6 +524,43 @@ app.post("/yolo_event", async (req, res) => {
         },
     });
     res.sendStatus(200);
+});
+
+app.post("/touch_sensor_input", async (req, res) => {
+    const event = req.body.event;
+
+    if (!isPlainObject(event)) {
+        console.log("rejected touch event: event must be an object", req.body);
+        return res.status(400).json({ error: "event must be an object" });
+    }
+    if (event.source !== "touch") {
+        console.log("rejected touch event: invalid source", event);
+        return res.status(400).json({ error: "source must be touch" });
+    }
+    if (event.type !== "touch_started" && event.type !== "touch_ended") {
+        console.log("rejected touch event: invalid type", event);
+        return res.status(400).json({ error: "unknown touch event type" });
+    }
+
+    const bodyPart = TOUCH_SENSOR_BINDINGS[event.sensor_id];
+    if (!bodyPart) {
+        console.log("rejected touch event: unknown sensor_id", event.sensor_id);
+        return res.status(400).json({ error: "unknown touch sensor" });
+    }
+
+    const semanticEvent = {
+        event: {
+            source: "touch",
+            action: event.type === "touch_started" ? "petting_started" : "petting_ended",
+            body_part: bodyPart,
+            timestamp: event.timestamp,
+        },
+    };
+
+    console.log("accepted touch event:", semanticEvent);
+    await sendJsonToChatGPT(semanticEvent);
+
+    return res.json({ status: "OK" });
 });
 
 app.listen(3000, () => {

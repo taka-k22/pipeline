@@ -721,21 +721,41 @@ async function runLLaVA(prompt) {
 
     await page.evaluate(({ assistantOutputSelector, outputPollIntervalMs }) => {
         const lastContents = new Map();
+        const ignoredInitialContainers = new WeakSet();
+        let initialScanDone = false;
+
+        function getCurrentText(container) {
+            return container.innerText.trim();
+        }
 
         function pollTexts() {
             const containers = document.querySelectorAll(assistantOutputSelector);
+
+            if (!initialScanDone) {
+                containers.forEach((container) => {
+                    lastContents.set(container, getCurrentText(container));
+                    ignoredInitialContainers.add(container);
+                });
+                initialScanDone = true;
+                return;
+            }
+
             containers.forEach((container) => {
-                const currentText = container.innerText.trim();
+                const currentText = getCurrentText(container);
                 const lastText = lastContents.get(container) || "";
 
                 if (currentText && currentText !== lastText) {
                     lastContents.set(container, currentText);
+                    if (ignoredInitialContainers.has(container)) {
+                        return;
+                    }
                     window.onPartialOutput(currentText);
                 }
             });
         }
 
         console.log("ChatGPT output monitor started");
+        pollTexts();
         setInterval(pollTexts, outputPollIntervalMs);
     }, {
         assistantOutputSelector: config.browser.assistantOutputSelector,
